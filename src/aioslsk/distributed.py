@@ -599,7 +599,9 @@ class DistributedNetwork(BaseManager):
                 # connection fails before this completion this situation could
                 # occur
                 if not peer:
-                    logger.warning(
+                    # soulshelf fork: distributed connections routinely close before full init
+                    # (especially behind NAT) — expected churn, debug not warning.
+                    logger.debug(
                         "connection was not registered with the distributed network : %r", connection)
                     return
 

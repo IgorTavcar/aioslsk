@@ -16,7 +16,7 @@ from .events import (
     SessionDestroyedEvent,
     SessionInitializedEvent,
 )
-from .exceptions import AioSlskException, AuthenticationError, InvalidSessionError
+from .exceptions import AioSlskException, AuthenticationError, InvalidSessionError, NetworkError
 from .interest.manager import InterestManager
 from .shares.cache import SharesCache, SharesNullCache
 from .shares.manager import ExecutorFactory, SharesManager
@@ -212,8 +212,16 @@ class SoulSeekClient:
         self.network.server_connection.start_reader_task()
 
     def _exception_handler(self, loop, context):
+        exc = context.get('exception', None)
+        # soulshelf fork: peer/connection failures routinely escape to the loop on a P2P
+        # client (unreachable peers, resets, indirect-connect timeouts, cancelled connection
+        # races). These are expected churn — log at debug WITHOUT a traceback rather than
+        # flooding ERROR. Genuinely unexpected exceptions still get the full traceback below.
+        if isinstance(exc, (NetworkError, ConnectionError, asyncio.TimeoutError, asyncio.CancelledError)):
+            logger.debug("loop: %s : %r", context.get('message', ''), exc)
+            return
         message = f"unhandled exception on loop {loop!r} : context : {context!r}"
-        logger.exception(message, exc_info=context.get('exception', None))
+        logger.exception(message, exc_info=exc)
 
     async def __aenter__(self) -> SoulSeekClient:
         await self.start()

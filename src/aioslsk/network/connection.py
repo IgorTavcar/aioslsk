@@ -136,7 +136,8 @@ class ListeningConnection(Connection):
                     await self._server.wait_closed()
 
         except Exception as exc:
-            adapter.warning(
+            # soulshelf fork: peer resets on disconnect are expected churn — debug, not warning.
+            adapter.debug(
                 "exception while disconnecting", extra=self.__dict__, exc_info=exc)
 
         finally:
@@ -269,7 +270,8 @@ class DataConnection(Connection, abc.ABC):
                     await self._writer.wait_closed()
 
         except Exception as exc:
-            adapter.warning(
+            # soulshelf fork: peer resets on disconnect are expected churn — debug, not warning.
+            adapter.debug(
                 "exception while disconnecting : %r", exc, extra=self.__dict__)
 
         finally:
@@ -301,10 +303,13 @@ class DataConnection(Connection, abc.ABC):
                 message = await self.receive_message_object()
 
             except ConnectionReadError:
-                adapter.warning("read error", extra=self.__dict__)
+                # soulshelf fork: peers dropping mid-read is expected — debug, not warning.
+                adapter.debug("read error", extra=self.__dict__)
 
             except MessageDeserializationError as exc:
-                adapter.warning(
+                # soulshelf fork: a peer sent unparseable bytes — per-connection garbage,
+                # not actionable; debug not warning.
+                adapter.debug(
                     "failed to deserialize message : %s", exc.proto_message, extra=self.__dict__)
 
             else:
@@ -478,7 +483,8 @@ class DataConnection(Connection, abc.ABC):
         :raise ConnectionWriteError: error or timeout occured during writing
         """
         if self._is_closing:
-            adapter.warning(
+            # soulshelf fork: benign during shutdown (distributed/server teardown) — debug.
+            adapter.debug(
                 "not sending message, connection is closing / closed : %s",
                 message,
                 extra=self.__dict__

@@ -1174,7 +1174,9 @@ class Network:
         except asyncio.CancelledError:
             logger.debug("cancelled ConnectToPeer request : %s", message)
         except Exception as exc:
-            logger.warning("failed to fulfill ConnectToPeer request : %s : %r", message, exc)
+            # soulshelf fork: expected on a NAT'd / firewalled leech-only client — many peers
+            # request a callback connection we cannot fulfil; debug, not warning (avoids flood).
+            logger.debug("failed to fulfill ConnectToPeer request : %s : %r", message, exc)
         else:
             logger.info("successfully fulfilled ConnectToPeer request : %s", message)
         finally:
