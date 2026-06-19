@@ -1706,6 +1706,8 @@ async def _on_peer_search_reply(self, message, connection):
 
 <p>Practical heuristic for distinguishing format families: a result carrying <code>BITRATE</code> (and possibly <code>VBR</code>) is lossy (MP3); a result carrying <code>SAMPLE_RATE</code> and <code>BIT_DEPTH</code> is lossless (FLAC/WAV). Many peers omit attributes entirely, so always treat the map as sparse and default-missing.</p>
 
+<p>For a typed view, <code>FileData.decode_attributes()</code> (<code>protocol/primitives.py:558</code>) returns a <code>FileAttributes</code> with named, <code>Optional</code> fields — <code>bit_rate</code>, <code>duration</code> (alias <code>length</code>), <code>is_vbr</code>, <code>sample_rate</code>, <code>bit_depth</code> — plus the convenience properties <code>is_lossless</code> (both <code>sample_rate</code> and <code>bit_depth</code> present) and <code>is_lossy</code> (<code>bit_rate</code> present and not lossless). It encodes the same heuristic above so you do not have to: <code>file.decode_attributes().is_lossless</code> works for both search results and browse files.</p>
+
 <p><strong>Ranking.</strong> The library does not sort or de-duplicate results for you — that is the integrator's job. The signals available per candidate file are: <code>SearchResult.avg_speed</code> (peer throughput), <code>SearchResult.has_free_slots</code> (no queue wait), <code>SearchResult.queue_size</code> (shorter is better), and the per-file quality map. A typical composite key is "prefer free slots, then higher bitrate/lossless, then higher avg_speed, then smaller queue." See the recipe below for a concrete sort key.</p>
 
 <h3 id="search-lifecycle">remove_request &amp; request lifecycle</h3>
@@ -2022,6 +2024,7 @@ sequenceDiagram
 <table><thead><tr><th>Method</th><th>State effect</th><th>Local file effect</th><th>Source</th></tr></thead>
 <tbody>
 <tr><td><code>download(username, filename, paused=False)</code></td><td><code>add()</code> the Transfer, then <code>state.pause()</code> (→PAUSED) if <code>paused</code> else <code>state.queue()</code> (→QUEUED). Returns the existing transfer if one already matches.</td><td>None yet (path computed at download start)</td><td><code>manager.py:226-249</code></td></tr>
+<tr><td><code>download_many(username, filenames, paused=False)</code></td><td>Convenience wrapper that calls <code>download()</code> per file; per-file failures are logged and skipped. Returns the <code>list[Transfer]</code> that were queued (or already existed).</td><td>None yet</td><td><code>manager.py:252-278</code></td></tr>
 <tr><td><code>queue(transfer)</code></td><td>Calls <code>state.queue()</code>. Valid from ABORTED, PAUSED, COMPLETE, INCOMPLETE, FAILED. <strong>Resumes from offset</strong> for INCOMPLETE/FAILED/PAUSED (keeps file); <strong>fresh re-download</strong> for COMPLETE/ABORTED (resets progress + local path).</td><td>Kept for resume cases; <code>local_path</code> nulled for COMPLETE/ABORTED downloads</td><td><code>manager.py:273-303</code></td></tr>
 <tr><td><code>pause(transfer)</code></td><td>Calls <code>state.pause()</code> → PAUSED. Cancels running tasks / stops transfer.</td><td><strong>Kept</strong> (partial file preserved)</td><td><code>manager.py:305-317</code></td></tr>
 <tr><td><code>abort(transfer)</code></td><td>Calls <code>state.abort(reason=AbortReason.REQUESTED)</code> → ABORTED. Cancels tasks.</td><td><strong>Deletes</strong> the partial file (downloads); uploads keep their file</td><td><code>manager.py:251-271</code></td></tr>
@@ -2197,6 +2200,29 @@ async def browse_folder(client, username: str, directory: str, timeout: float = 
 
     # dirs: list[DirectoryData]; each .name (primitives.py:561) + .files: list[FileData]
     return dirs</code></pre>
+
+<p><strong>High-level browse &amp; directory download.</strong> For the common case of "browse a user, then download some/all of it", two convenience wrappers avoid the manual path bookkeeping. <code>client.browse_user(username)</code> executes a <code>PeerBrowseCommand</code> (<code>commands.py</code>) and returns a navigable <code>BrowseResult</code> (<code>browse.py</code>) built from the flat <code>PeerSharesReply</code>: <code>result.get_directory(path)</code> navigates to a directory by its full remote path, and <code>result.root</code> is a <code>BrowseDirectory</code> tree (<code>walk()</code>, <code>all_files()</code>, <code>file_paths()</code>, <code>get_path(subpath)</code>), plus whole-tree <code>result.iter_files()</code> / <code>result.iter_file_paths()</code>. <code>client.download_directory(username, directory, recursive=True, include_locked=False)</code> browses and enqueues every file under a directory, returning the <code>list[Transfer]</code>.</p>
+<p><strong>Browse filenames are leaf names — not full paths.</strong> Unlike search results (where <code>FileData.filename</code> is the full remote path), a <em>browse</em> reply carries only the leaf name in <code>FileData.filename</code> and the path in the parent <code>Directory.name</code> (the share builds them with <code>use_full_path=False</code>, <code>shares/manager.py:831</code>). The path you must pass to a download is <code>directory.name + "\\" + filename</code> — which is exactly what <code>BrowseDirectory.file_paths()</code> / <code>BrowseResult.iter_file_paths()</code> yield. Use them; do not download bare <code>FileData.filename</code> from a browse, or the peer answers <code>"File not shared."</code></p>
+<pre><code class="language-python">from aioslsk.protocol.primitives import FileAttributes
+
+async def browse_and_grab(client, username: str):
+    browse = await client.browse_user(username)        # BrowseResult (raises on no-reply/timeout)
+
+    for directory in browse.root.walk():               # navigate the tree
+        print(directory.name, len(directory.files), "file(s)")
+
+    for file in browse.iter_files():                   # decoded audio attributes
+        attrs: FileAttributes = file.decode_attributes()
+        if attrs.is_lossless or (attrs.bit_rate or 0) >= 320:
+            ...
+
+    # download a whole directory (recursive by default) — handles full-path joining for you
+    transfers = await client.download_directory(username, r"shared\\Music\\Album")
+
+    # or enqueue a hand-picked subset; file_paths() yields the FULL remote paths
+    folder = browse.get_directory(r"shared\\Music\\Album")
+    await client.transfers.download_many(username, list(folder.file_paths()))
+    return transfers</code></pre>
 
 <h3 id="recipe-download">5. Download a file to a chosen local_path WITHOUT the race</h3>
 <p><strong>The trap:</strong> <code>client.transfers.download(username, filename)</code> (<code>transfer/manager.py:226</code>) immediately calls <code>add()</code> and then <code>transfer.state.queue()</code> in the same coroutine (<code>transfer/manager.py:237</code>, <code>transfer/manager.py:247</code>). Queuing makes the transfer eligible for the management cycle, which can race to start the actual download <strong>before you get a chance to set <code>local_path</code></strong>. If <code>local_path</code> is unset when the file connection arrives, <code>_prepare_download_path()</code> computes a path from <code>settings.shares.download</code> via <code>calculate_download_path()</code> (<code>transfer/manager.py:677-680</code>) — not the one you wanted.</p>

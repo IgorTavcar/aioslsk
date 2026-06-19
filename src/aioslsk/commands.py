@@ -59,6 +59,7 @@ from .protocol.messages import (
     UserSearch,
 )
 from .protocol.primitives import DirectoryData, Recommendation, MessageDataclass
+from .browse import BrowseResult
 from .network.network import ExpectedResponse
 from .network.connection import PeerConnection, ServerConnection
 from .room.model import Room, RoomMessage
@@ -923,6 +924,34 @@ class PeerGetSharesCommand(BaseCommand[PeerSharesReply.Request, SharesReply]):
             self, client: SoulSeekClient, response: PeerSharesReply.Request) -> SharesReply:
         locked_dirs = response.locked_directories or []
         return response.directories, locked_dirs
+
+
+class PeerBrowseCommand(BaseCommand[PeerSharesReply.Request, Optional[BrowseResult]]):
+    """Browses a user's shared files, returning a navigable
+    :class:`.BrowseResult` tree (as opposed to :class:`PeerGetSharesCommand`
+    which returns the raw directory lists)
+    """
+
+    def __init__(self, username: str):
+        self.username: str = username
+
+    async def send(self, client: SoulSeekClient):
+        await client.network.send_peer_messages(
+            self.username, PeerSharesRequest.Request()
+        )
+
+    def build_expected_response(self, client: SoulSeekClient) -> Optional[ExpectedResponse]:
+        return ExpectedResponse(
+            PeerConnection,
+            PeerSharesReply.Request,
+            peer=self.username
+        )
+
+    def handle_response(
+            self, client: SoulSeekClient, response: PeerSharesReply.Request) -> BrowseResult:
+        return BrowseResult.from_shares_reply(
+            self.username, response.directories, response.locked_directories
+        )
 
 
 class PeerGetDirectoryContentCommand(BaseCommand[PeerDirectoryContentsReply.Request, list[DirectoryData]]):

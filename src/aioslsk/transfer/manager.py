@@ -2,6 +2,7 @@ from __future__ import annotations
 import aiofiles
 from aiofiles import os as asyncos
 import asyncio
+from collections.abc import Iterable
 from async_timeout import timeout as atimeout
 from enum import auto, Flag
 import logging
@@ -247,6 +248,34 @@ class TransferManager(BaseManager):
             await transfer.state.queue()
 
         return transfer
+
+    async def download_many(
+            self, username: str, filenames: Iterable[str],
+            paused: bool = False) -> list[Transfer]:
+        """Requests to download multiple files from the given user.
+
+        This is a convenience wrapper around :func:`download`: each file is
+        enqueued in turn. Files that fail to be queued are logged and skipped, so
+        the returned list contains only the transfers that were added (or already
+        existed). Existing transfers are returned as-is (see :func:`add`).
+
+        :param username: User from which to download the files
+        :param filenames: Full remote paths of the files to download, as returned
+            in browse or search results
+        :param paused: Adds the downloads in the paused state
+        :return: list of :class:`.Transfer` objects for the queued downloads
+        """
+        transfers: list[Transfer] = []
+        for filename in filenames:
+            try:
+                transfers.append(
+                    await self.download(username, filename, paused=paused))
+            except Exception:
+                logger.exception(
+                    "failed to queue download (username=%r, filename=%r)",
+                    username, filename
+                )
+        return transfers
 
     async def abort(self, transfer: Transfer):
         """Aborts the given transfer. This will cancel all pending transfers

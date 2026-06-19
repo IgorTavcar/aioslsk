@@ -555,6 +555,56 @@ class FileData(ProtocolDataclass):
 
         return attribute_dict
 
+    def decode_attributes(self) -> 'FileAttributes':
+        """Decodes this file's raw attribute list into a named, typed
+        :class:`FileAttributes` view
+        """
+        return FileAttributes.from_file_data(self)
+
+
+@dataclass(frozen=True, slots=True)
+class FileAttributes:
+    """Decoded, named view of a :class:`FileData`'s audio attributes.
+
+    Lossless formats (eg. FLAC, WAV) carry ``sample_rate`` + ``bit_depth``,
+    lossy formats (eg. MP3) carry ``bit_rate`` + ``duration`` (+ ``is_vbr``).
+    Any field may be ``None`` when the peer did not supply that attribute; this
+    view is never serialized back onto the wire.
+    """
+    bit_rate: Optional[int] = None
+    duration: Optional[int] = None
+    is_vbr: Optional[bool] = None
+    sample_rate: Optional[int] = None
+    bit_depth: Optional[int] = None
+
+    @property
+    def length(self) -> Optional[int]:
+        """Alias for :attr:`duration` (length in seconds)"""
+        return self.duration
+
+    @property
+    def is_lossless(self) -> bool:
+        """Whether the file looks lossless (has both a sample rate and bit depth)"""
+        return self.sample_rate is not None and self.bit_depth is not None
+
+    @property
+    def is_lossy(self) -> bool:
+        """Whether the file looks lossy (has a bitrate but is not lossless)"""
+        return self.bit_rate is not None and not self.is_lossless
+
+    @classmethod
+    def from_file_data(cls, file: 'FileData') -> 'FileAttributes':
+        """Builds a :class:`FileAttributes` from a :class:`FileData`"""
+        attribute_map = file.get_attribute_map()
+        vbr = attribute_map.get(AttributeKey.VBR)
+        return cls(
+            bit_rate=attribute_map.get(AttributeKey.BITRATE),
+            duration=attribute_map.get(AttributeKey.DURATION),
+            is_vbr=None if vbr is None else bool(vbr),
+            sample_rate=attribute_map.get(AttributeKey.SAMPLE_RATE),
+            bit_depth=attribute_map.get(AttributeKey.BIT_DEPTH),
+        )
+
 
 @dataclass(frozen=True, order=True, slots=True)
 class DirectoryData(ProtocolDataclass):

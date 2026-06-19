@@ -50,6 +50,47 @@ Starting the client and sending a private message:
     asyncio.run(main())
 
 
+Browsing a user and downloading their files:
+
+.. code-block:: python
+
+    import asyncio
+    from aioslsk.client import SoulSeekClient
+    from aioslsk.settings import Settings, CredentialsSettings
+
+    settings: Settings = Settings(
+        credentials=CredentialsSettings(username='my_user', password='Secret123')
+    )
+
+    async def main():
+        client: SoulSeekClient = SoulSeekClient(settings)
+
+        await client.start()
+        await client.login()
+
+        # Browse a user; `browse` is a navigable tree (BrowseResult)
+        browse = await client.browse_user('some_user')
+        for directory in browse.root.walk():
+            print(directory.name, len(directory.files), 'file(s)')
+
+        # Decoded audio attributes (bitrate, sample rate, lossless, ...)
+        for file in browse.iter_files():
+            attrs = file.decode_attributes()
+            print(file.filename, attrs.bit_rate, attrs.sample_rate, attrs.is_lossless)
+
+        # Download a single file, several files, or a whole directory
+        await client.transfers.download('some_user', r'shared\Music\Album\01.mp3')
+        await client.transfers.download_many('some_user', [
+            r'shared\Music\Album\02.mp3',
+            r'shared\Music\Album\03.mp3',
+        ])
+        await client.download_directory('some_user', r'shared\Music\Album')
+
+        await client.stop()
+
+    asyncio.run(main())
+
+
 Development
 ===========
 

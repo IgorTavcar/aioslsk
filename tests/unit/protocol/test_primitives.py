@@ -7,6 +7,7 @@ from aioslsk.protocol.primitives import (
     decode_string,
     Attribute,
     AttributeKey,
+    FileAttributes,
     FileData,
     MessageDataclass,
     uint32,
@@ -83,3 +84,48 @@ class TestFileData:
             AttributeKey.SAMPLE_RATE: 44100,
             AttributeKey.BIT_DEPTH: 24
         }
+
+    def test_decodeAttributes_lossy(self):
+        file_data = FileData(1, 'test', 2, 'mp3', [
+            Attribute(0, 320),  # bitrate
+            Attribute(1, 200),  # duration
+            Attribute(2, 1),    # vbr
+        ])
+
+        attributes = file_data.decode_attributes()
+
+        assert attributes == FileAttributes(
+            bit_rate=320, duration=200, is_vbr=True)
+        assert attributes.length == 200
+        assert attributes.is_lossy is True
+        assert attributes.is_lossless is False
+
+    def test_decodeAttributes_lossless(self):
+        file_data = FileData(1, 'test', 2, 'flac', [
+            Attribute(4, 44100),  # sample rate
+            Attribute(5, 16),     # bit depth
+        ])
+
+        attributes = file_data.decode_attributes()
+
+        assert attributes.sample_rate == 44100
+        assert attributes.bit_depth == 16
+        assert attributes.bit_rate is None
+        assert attributes.is_lossless is True
+        assert attributes.is_lossy is False
+
+    def test_decodeAttributes_cbr(self):
+        file_data = FileData(1, 'test', 2, 'mp3', [Attribute(0, 256), Attribute(2, 0)])
+
+        attributes = file_data.decode_attributes()
+
+        assert attributes.is_vbr is False
+
+    def test_decodeAttributes_empty(self):
+        attributes = FileData(1, 'test', 2, '', []).decode_attributes()
+
+        assert attributes == FileAttributes()
+        assert attributes.is_vbr is None
+        assert attributes.length is None
+        assert attributes.is_lossless is False
+        assert attributes.is_lossy is False

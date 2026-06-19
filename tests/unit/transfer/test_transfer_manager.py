@@ -119,6 +119,40 @@ class TestTransferManager:
         assert transfer.state.VALUE == TransferState.QUEUED
 
     @pytest.mark.asyncio
+    async def test_whenDownloadMany_shouldQueueAllFiles(self, manager: TransferManager):
+        filenames = ['a.mp3', 'b.mp3', 'c.mp3']
+
+        transfers = await manager.download_many(DEFAULT_USERNAME, filenames)
+
+        assert len(transfers) == 3
+        assert [t.remote_path for t in transfers] == filenames
+        assert all(t.state.VALUE == TransferState.QUEUED for t in transfers)
+        assert len(manager.transfers) == 3
+
+    @pytest.mark.asyncio
+    async def test_whenDownloadMany_paused_shouldQueuePaused(self, manager: TransferManager):
+        transfers = await manager.download_many(DEFAULT_USERNAME, ['a.mp3'], paused=True)
+
+        assert transfers[0].state.VALUE == TransferState.PAUSED
+
+    @pytest.mark.asyncio
+    async def test_whenDownloadMany_oneFails_shouldSkipAndContinue(self, manager: TransferManager):
+        real_download = manager.download
+
+        async def flaky_download(username, filename, paused=False):
+            if filename == 'bad.mp3':
+                raise RuntimeError('boom')
+            return await real_download(username, filename, paused=paused)
+
+        manager.download = flaky_download
+
+        transfers = await manager.download_many(
+            DEFAULT_USERNAME, ['ok1.mp3', 'bad.mp3', 'ok2.mp3'])
+
+        assert [t.remote_path for t in transfers] == ['ok1.mp3', 'ok2.mp3']
+        assert len(manager.transfers) == 2
+
+    @pytest.mark.asyncio
     async def test_whenAbortTransfer_download_shouldSetAbortStateAndDeleteFile(self, manager: TransferManager):
         transfer = Transfer(DEFAULT_USERNAME, DEFAULT_FILENAME, TransferDirection.DOWNLOAD)
         local_path = '/some/path.mp3'

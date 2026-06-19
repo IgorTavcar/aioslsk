@@ -5,7 +5,8 @@ import logging
 from typing import Optional
 
 from .base_manager import BaseManager
-from .commands import BaseCommand, RC, RT
+from .browse import BrowseResult
+from .commands import BaseCommand, PeerBrowseCommand, RC, RT
 from .constants import DEFAULT_COMMAND_TIMEOUT
 from .distributed import DistributedNetwork
 from .events import (
@@ -32,6 +33,7 @@ from .session import Session
 from .settings import Settings
 from .transfer.cache import TransferCache, TransferNullCache
 from .transfer.manager import TransferManager
+from .transfer.model import Transfer
 from .user.manager import UserManager
 from .utils import ticket_generator
 
@@ -289,6 +291,50 @@ class SoulSeekClient:
                 _, response_obj = await response_future
             return command.handle_response(self, response_obj)
         return None
+
+    async def browse_user(self, username: str) -> BrowseResult:
+        """Browses the shared files of the given user, returning a navigable
+        :class:`.BrowseResult` tree.
+
+        This is a convenience wrapper around executing a
+        :class:`.PeerBrowseCommand`.
+
+        :param username: user to browse
+        :return: a :class:`.BrowseResult` exposing the user's share tree
+        """
+        result = await self.execute(PeerBrowseCommand(username), response=True)
+        assert result is not None  # response=True always yields a result
+        return result
+
+    async def download_directory(
+            self, username: str, directory: str, recursive: bool = True,
+            include_locked: bool = False, paused: bool = False) -> list[Transfer]:
+        """Browses the given user and enqueues every file under the given remote
+        directory for download.
+
+        :param username: user to download from
+        :param directory: remote path of the directory to download (as found in
+            the user's browse result)
+        :param recursive: also download files in subdirectories of ``directory``
+        :param include_locked: include files residing in locked directories
+        :param paused: adds the downloads in the paused state
+        :return: list of created :class:`.Transfer` objects
+        :raise ValueError: if ``directory`` is not found in the user's shares
+        """
+        browse_result = await self.browse_user(username)
+        target = browse_result.get_directory(directory)
+        if target is None:
+            raise ValueError(
+                f"directory {directory!r} not found in shares of user {username!r}")
+
+        directories = list(target.walk()) if recursive else [target]
+        filenames = [
+            path
+            for sub in directories
+            if include_locked or not sub.is_locked
+            for path in sub.file_paths()
+        ]
+        return await self.transfers.download_many(username, filenames, paused=paused)
 
     # Creation methods
 

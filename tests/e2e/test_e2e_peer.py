@@ -4,11 +4,13 @@ from aioslsk.commands import (
     PeerGetUserInfoCommand,
 )
 from aioslsk.events import UserSharesReplyEvent, UserInfoUpdateEvent
+from aioslsk.transfer.state import TransferState
 from .mock.server import MockServer
 from .fixtures import mock_server, client_1, client_2
 from .utils import (
     wait_until_clients_initialized,
     wait_for_listener_awaited,
+    wait_for_transfer_state,
 )
 import pytest
 from unittest.mock import AsyncMock
@@ -67,10 +69,43 @@ class TestE2EPeer:
         assert event.current.has_slots_free is True
         assert event.current.queue_length == 0
 
-    # @pytest.mark.asyncio
-    # async def test_get_directory(self, mock_server: MockServer, client_1: SoulSeekClient, client_2: SoulSeekClient):
-    #     shares_listener = AsyncMock()
-    #     client_1.events.register(UserSharesReplyEvent, shares_listener)
-    #     await wait_until_clients_initialized(mock_server, amount=2)
+    @pytest.mark.asyncio
+    async def test_browse_user(self, mock_server: MockServer, client_1: SoulSeekClient, client_2: SoulSeekClient):
+        await wait_until_clients_initialized(mock_server, amount=2)
 
-    #     await client_1.get_user_directory()
+        result = await client_1.browse_user(
+            client_2.settings.credentials.username)
+
+        # The tree should be navigable and expose files with decodable attributes
+        files = list(result.iter_files())
+        assert len(files) > 0
+        # All shares are EVERYONE, so nothing is locked
+        assert all(not directory.is_locked for directory in result.root.walk())
+
+        flac = next(f for f in files if f.filename.endswith('.flac'))
+        attributes = flac.decode_attributes()
+        assert attributes.is_lossless is True
+
+    @pytest.mark.asyncio
+    async def test_download_directory(
+            self, mock_server: MockServer, client_1: SoulSeekClient,
+            client_2: SoulSeekClient):
+        client_1.network.set_download_speed_limit(100)
+        client_2.network.set_upload_speed_limit(100)
+        await wait_until_clients_initialized(mock_server, amount=2)
+
+        username = client_2.settings.credentials.username
+        result = await client_1.browse_user(username)
+
+        # Locate the single-file album directory in the share tree
+        album = next(
+            directory for directory in result.root.walk()
+            if directory.name.endswith('Cool_Test_Album')
+        )
+
+        transfers = await client_1.download_directory(username, album.name)
+
+        assert len(transfers) == 1
+        assert transfers[0].remote_path.endswith('Strange_Drone_Impact.mp3')
+
+        await wait_for_transfer_state(transfers[0], TransferState.COMPLETE)
